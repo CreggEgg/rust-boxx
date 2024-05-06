@@ -1,0 +1,65 @@
+{
+	"sensitivity":10000.0,
+	"mode":"FPS",
+	"log_keynames":false,
+	"binds":{
+		"FPS": {
+			"KeyW":{
+				"Axis": ["LY", 1.0]
+			},
+			"KeyS":{
+				"Axis": ["LY", -1.0]
+			},
+			"KeyA":{
+				"Axis": ["LX", -1.0]
+			},
+			"KeyD":{
+				"Axis": ["LX", 1.0]
+			},
+			"KeyJ":{
+				"Button":"X"
+			}
+		},
+		"SideScrolling":{
+			"KeyJ":{
+				"Button":"B"
+			},
+			"KeyN":{
+				"Button":"A"
+			},
+			"KeyW":{
+				"Axis": ["LY", 1.0]
+			},
+			"KeyS":{
+				"Axis": ["LY", -1.0]
+			},
+			"KeyA":{
+				"Axis": ["LX", -1.0]
+			},
+			"KeyD":{
+				"Axis": ["LX", 1.0]
+			},
+			"KeyK":{
+				"Trigger": ["Right", 1.0]
+			},
+			"Return":{
+				"Button": "START" 
+			},
+			"KeyL":{
+				"Button": "X" 
+			},
+			"KeyH":{
+				"Button": "RB" 
+			},
+			"Space":{
+				"Modifier": ["LY", 0.45]
+			},
+			"ControlLeft":{
+				"Modifier": ["LY", 0.70]
+			},
+			"ShiftLeft":{
+				"Modifier": ["LX", 0.5]
+			}
+		}
+	}
+}
