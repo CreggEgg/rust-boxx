@@ -1,9 +1,18 @@
 use std::{
-    collections::HashMap, fmt::write, fs, hash::Hash, ops::Deref, slice::Iter, str::FromStr,
-    sync::mpsc, thread, time::SystemTime,
+    borrow::BorrowMut,
+    collections::HashMap,
+    fmt::write,
+    fs,
+    hash::Hash,
+    ops::Deref,
+    slice::Iter,
+    str::FromStr,
+    sync::{mpsc, Arc, RwLock},
+    thread,
+    time::{Duration, SystemTime},
 };
 
-use rdev::{EventType, Key};
+use rdev::{Button, EventType, Key};
 use serde::{de, Deserialize, Serialize};
 use vigem_client::XButtons;
 
@@ -30,6 +39,7 @@ impl FromStr for Mode {
     }
 }
 
+#[derive(Serialize, Debug)]
 struct XButton(u16);
 
 impl Deref for XButton {
@@ -83,23 +93,22 @@ impl<'de> Deserialize<'de> for XButton {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, Debug)]
 enum Output {
     Button(XButton),
     Trigger(Trigger, f64),
     Modifier(Axis, f64),
     Axis(Axis, f64),
 }
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Hash, PartialEq, Eq, Deserialize, Serialize, Debug)]
 enum Input {
-    KeyPress(Key),
-    KeyRelease(Key),
-    // MousePress(rdev::Button),
-    // MouseRelease(rdev::Button),
-    // MouseMove { delta_x: f64, delta_y: f64 },
+    Key(Key),
+    MouseButton(Button), // MousePress(rdev::Button),
+                         // MouseRelease(rdev::Button),
+                         // MouseMove { delta_x: f64, delta_y: f64 },
 }
 
-#[derive(Hash, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Hash, PartialEq, Eq, Clone, Serialize, Deserialize, Debug)]
 enum Axis {
     LX,
     LY,
@@ -113,7 +122,7 @@ impl Axis {
     }
 }
 
-#[derive(Hash, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Hash, PartialEq, Eq, Clone, Serialize, Deserialize, Debug)]
 enum Trigger {
     Left,
     Right,
@@ -125,13 +134,14 @@ impl Trigger {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Config {
     sensitivity: f64,
     mode: Mode,
     log_keynames: bool,
-    binds: HashMap<Mode, HashMap<Key, Output>>,
+    binds: HashMap<Mode, (HashMap<Key, Output>, HashMap<Button, Output>)>,
 }
+struct Pause(bool);
 
 fn main() {
     let mut config: Config =
@@ -142,21 +152,38 @@ fn main() {
     //
 
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        rdev::grab(move |e| {
-            if e.event_type == EventType::KeyPress(Key::Delete) {
-                panic!("Del was pressed... Exiting");
+    let (pause_sender, pause_reciever) = mpsc::channel::<bool>();
+    let paused = Arc::new(RwLock::new(Pause(true)));
+    {
+        let paused = Arc::clone(&paused);
+        thread::spawn(move || {
+            while let Ok(val) = pause_reciever.recv() {
+                println!("Pause");
+                paused.write().unwrap().0 = val;
             }
+        });
+    }
+    {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            rdev::grab(move |e| {
+                if e.event_type == EventType::KeyPress(Key::Delete) {
+                    panic!("Del was pressed... Exiting");
+                } else if e.event_type == EventType::KeyPress(Key::Minus) {
+                    let current: bool = paused.read().unwrap().0;
+                    pause_sender.send(!current).unwrap();
+                }
 
-            tx.send(e.event_type).unwrap();
-            if let EventType::KeyPress(_) = e.event_type {
-                None
-            } else {
-                Some(e)
-            }
-        })
-        .unwrap();
-    });
+                if !paused.read().unwrap().0 {
+                    tx.send(e.event_type).unwrap();
+                    None
+                } else {
+                    Some(e)
+                }
+            })
+            .unwrap();
+        });
+    }
 
     let client = vigem_client::Client::connect().unwrap();
 
@@ -174,10 +201,6 @@ fn main() {
         ..Default::default()
     };
 
-    let keymap = config
-        .binds
-        .get(&config.mode)
-        .expect("No config defined for desired mode");
     // let keymap = {
     //     let mut map: HashMap<Key, Output> = HashMap::new();
     //     match config.mode {
@@ -206,118 +229,169 @@ fn main() {
     //     map
     // };
 
-    let mut keystates: HashMap<Key, KeyState> = HashMap::new();
-    let mut last_coords: (f64, f64) = (0.0, 0.0);
-    while let Ok(event) = rx.recv() {
-        if let EventType::KeyPress(key) = event {
-            if config.log_keynames {
-                println!("{:?}", key);
-            }
-            keystates.insert(key, KeyState::Pressed(SystemTime::now()));
-        }
-        if let EventType::KeyRelease(key) = event {
-            keystates.insert(key, KeyState::Released);
-        }
-
-
-        let mut buttonflags = 0b0;
-        let buttons = keymap.iter().filter_map(|(key, button)| {
-            if let Some(KeyState::Pressed(time)) = keystates.get(key) {
-                Some((SystemTime::now(), button))
-            } else {
-                None
-            }
-        });
-        let mut axes: HashMap<Axis, (SystemTime, f64)> = HashMap::new();
-        for axis in Axis::iterator() {
-            axes.insert(axis.clone(), (SystemTime::UNIX_EPOCH, 0.0));
-        }
-
-        let mut modifiers = Vec::new();
-
-        gamepad.left_trigger = 0;
-        gamepad.right_trigger = 0;
-
-        buttons.for_each(|output| match output {
-            (_, Output::Button(button)) => buttonflags |= **button,
-            (_, Output::Modifier(axis, value)) => modifiers.push((axis, value)),
-            (time, Output::Axis(axis, value)) => {
-                let current = axes.get(axis);
-                if let Some((current_time, _)) = current {
-                    if time
-                        .duration_since(*current_time)
-                        .map(|x| x.as_secs() as f64)
-                        .unwrap_or(-1.0)
-                        > 0.0
-                    {
-                        axes.insert(axis.clone(), (time, *value));
+    let handle = thread::spawn(move || {
+        let mut keystates: HashMap<Input, KeyState> = HashMap::new();
+        let mut last_coords: (f64, f64) = (0.0, 0.0);
+        let keymap = process_binds(
+            config
+                .binds
+                .get(&config.mode)
+                .expect("No config defined for desired mode"),
+        );
+        loop {
+            if let Ok(event) = rx.try_recv() {
+                if let EventType::KeyPress(key) = event {
+                    if config.log_keynames {
+                        println!("{:?}", key);
                     }
-                } else {
-                    axes.insert(axis.clone(), (time, *value));
+                    keystates.insert(Input::Key(key), KeyState::Pressed(SystemTime::now()));
                 }
-            }
+                if let EventType::KeyRelease(key) = event {
+                    keystates.insert(Input::Key(key), KeyState::Released);
+                }
+                if let EventType::ButtonPress(button) = event {
+                    if config.log_keynames {
+                        println!("{:?}", button);
+                    }
+                    keystates.insert(
+                        Input::MouseButton(button),
+                        KeyState::Pressed(SystemTime::now()),
+                    );
+                }
+                if let EventType::ButtonRelease(button) = event {
+                    keystates.insert(Input::MouseButton(button), KeyState::Released);
+                }
 
-            (_, Output::Trigger(trigger, value)) => {
-                match trigger {
-                    Trigger::Left => gamepad.left_trigger = (value * (u8::MAX as f64)) as u8,
-                    Trigger::Right => gamepad.right_trigger = (value * (u8::MAX as f64)) as u8,
-                };
-            }
-        });
+                let mut buttonflags = 0b0;
+                let buttons = keymap.iter().filter_map(|(key, button)| {
+                    if let Some(KeyState::Pressed(time)) = keystates.get(key) {
+                        Some((SystemTime::now(), button))
+                    } else {
+                        None
+                    }
+                });
+                let mut axes: HashMap<Axis, (SystemTime, f64)> = HashMap::new();
+                for axis in Axis::iterator() {
+                    axes.insert(axis.clone(), (SystemTime::UNIX_EPOCH, 0.0));
+                }
 
-        for (axis, value) in modifiers {
-            if let Some(axis) = axes.get_mut(axis) {
-                axis.1 *= value;
+                let mut modifiers = Vec::new();
+
+                gamepad.left_trigger = 0;
+                gamepad.right_trigger = 0;
+
+                buttons.for_each(|output| match output {
+                    (_, Output::Button(button)) => buttonflags |= **button,
+                    (_, Output::Modifier(axis, value)) => modifiers.push((axis, value)),
+                    (time, Output::Axis(axis, value)) => {
+                        let current = axes.get(axis);
+                        if let Some((current_time, _)) = current {
+                            if time
+                                .duration_since(*current_time)
+                                .map(|x| x.as_secs() as f64)
+                                .unwrap_or(-1.0)
+                                > 0.0
+                            {
+                                axes.insert(axis.clone(), (time, *value));
+                            }
+                        } else {
+                            axes.insert(axis.clone(), (time, *value));
+                        }
+                    }
+
+                    (_, Output::Trigger(trigger, value)) => {
+                        match trigger {
+                            Trigger::Left => {
+                                gamepad.left_trigger = (value * (u8::MAX as f64)) as u8
+                            }
+                            Trigger::Right => {
+                                gamepad.right_trigger = (value * (u8::MAX as f64)) as u8
+                            }
+                        };
+                    }
+                });
+
+                for (axis, value) in modifiers {
+                    if let Some(axis) = axes.get_mut(axis) {
+                        axis.1 *= value;
+                    }
+                }
+
+                gamepad.buttons.raw = buttonflags;
+                // dbg!(gamepad.buttons.raw);
+
+                // let buttons = keystates.iter().filter_map(|(key, state)| match state {
+                //     KeyState::Pressed(_) => Some({
+                //         let
+                //     }),
+                //     KeyState::Released => None,
+                // });
+
+                // let a = keystates.get(&Key::KeyA).unwrap_or(&KeyState::Released);
+                // let d = keystates.get(&Key::KeyD).unwrap_or(&KeyState::Released);
+                // let w = keystates.get(&Key::KeyW).unwrap_or(&KeyState::Released);
+                // let s = keystates.get(&Key::KeyS).unwrap_or(&KeyState::Released);
+                //
+                // let lx = handle_socd(d, a);
+                // let ly = handle_socd(w, s);
+                //
+                let lx = axes.get(&Axis::LX).unwrap().1;
+                let ly = axes.get(&Axis::LY).unwrap().1;
+                let rx = axes.get(&Axis::RX).unwrap().1;
+                let ry = axes.get(&Axis::RY).unwrap().1;
+
+                gamepad.thumb_lx = (lx * (i16::MAX as f64)) as i16;
+                gamepad.thumb_ly = (ly * (i16::MAX as f64)) as i16;
+
+                if config.mode != Mode::FPS {
+                    gamepad.thumb_rx = (rx * (i16::MAX as f64)) as i16;
+                    gamepad.thumb_ry = (ry * (i16::MAX as f64)) as i16;
+                } else {
+                    if let EventType::MouseMove { x, y } = event {
+                        // println!("{x}, {y}");
+                        let coords = (x, y);
+
+                        let delta = (x - last_coords.0, y - last_coords.1);
+
+                        let new_rx = (delta.0 * config.sensitivity);
+                        let new_ry = (delta.1 * -config.sensitivity);
+                        let old_rx = gamepad.thumb_rx as f64;
+                        let old_ry = gamepad.thumb_ry as f64;
+                        let intermediate_rx = old_rx + (((new_rx - old_rx) as f64) * 1.0);
+                        let intermediate_ry = old_ry + (((new_ry - old_ry) as f64) * 1.0);
+                        gamepad.thumb_rx = intermediate_rx as i16;
+                        gamepad.thumb_ry = intermediate_ry as i16;
+
+                        last_coords = coords;
+                    }
+                }
+
+                target.update(&gamepad).unwrap();
+            } else {
+                gamepad.thumb_rx = 0;
+                gamepad.thumb_ry = 0;
+                target.update(&gamepad).unwrap();
+                thread::sleep(Duration::from_millis(20));
             }
+            // thread::sleep(Duration::from_millis(20));
         }
+    });
+    handle.join().unwrap();
+}
 
-        gamepad.buttons.raw = buttonflags;
-        // dbg!(gamepad.buttons.raw);
-
-        // let buttons = keystates.iter().filter_map(|(key, state)| match state {
-        //     KeyState::Pressed(_) => Some({
-        //         let
-        //     }),
-        //     KeyState::Released => None,
-        // });
-
-        // let a = keystates.get(&Key::KeyA).unwrap_or(&KeyState::Released);
-        // let d = keystates.get(&Key::KeyD).unwrap_or(&KeyState::Released);
-        // let w = keystates.get(&Key::KeyW).unwrap_or(&KeyState::Released);
-        // let s = keystates.get(&Key::KeyS).unwrap_or(&KeyState::Released);
-        //
-        // let lx = handle_socd(d, a);
-        // let ly = handle_socd(w, s);
-        let lx = axes.get(&Axis::LX).unwrap().1;
-        let ly = axes.get(&Axis::LY).unwrap().1;
-        let rx = axes.get(&Axis::RX).unwrap().1;
-        let ry = axes.get(&Axis::RY).unwrap().1;
-
-        gamepad.thumb_lx = (lx * (i16::MAX as f64)) as i16;
-        gamepad.thumb_ly = (ly * (i16::MAX as f64)) as i16;
-
-
-
-        if config.mode != Mode::FPS {
-            gamepad.thumb_rx = (rx * (i16::MAX as f64)) as i16;
-            gamepad.thumb_ry = (ry * (i16::MAX as f64)) as i16;
-        } else {
-            if let EventType::MouseMove { x, y } = event {
-                
-                // println!("{x}, {y}");
-                let coords = (x, y);
-
-                let delta = (x - last_coords.0, y - last_coords.1);
-
-                gamepad.thumb_rx = (delta.0 * config.sensitivity) as i16;
-                gamepad.thumb_ry = (delta.1 * -config.sensitivity) as i16;
-
-                last_coords = coords;
-            }
-        }
-
-        target.update(&gamepad).unwrap();
-    }
+fn process_binds(
+    initial: &(HashMap<Key, Output>, HashMap<Button, Output>),
+) -> HashMap<Input, &Output> {
+    let keys = initial
+        .0
+        .iter()
+        .map(|(key, output)| (Input::Key(*key), output));
+    let buttons = initial
+        .1
+        .iter()
+        .map(|(button, output)| (Input::MouseButton(*button), output));
+    let tmp = keys.chain(buttons);
+    HashMap::from_iter(tmp)
 }
 
 fn handle_socd(pos: &KeyState, neg: &KeyState) -> i32 {

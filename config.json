@@ -3,7 +3,8 @@
 	"mode":"FPS",
 	"log_keynames":false,
 	"binds":{
-		"FPS": {
+		"FPS": [
+			{
 			"KeyW":{
 				"Axis": ["LY", 1.0]
 			},
@@ -18,9 +19,22 @@
 			},
 			"KeyJ":{
 				"Button":"X"
+			},
+			"KeyH":{
+				"Button":"A"
+			},
+			"KeyX":{
+				"Button":"B"
 			}
-		},
-		"SideScrolling":{
+		}, {
+			"Left": {
+				"Trigger": ["Right", 1.0]
+			},
+			"Right": {
+				"Trigger": ["Left", 1.0]
+			}
+		}],
+		"SideScrolling":[{
 			"KeyJ":{
 				"Button":"B"
 			},
@@ -60,6 +74,6 @@
 			"ShiftLeft":{
 				"Modifier": ["LX", 0.5]
 			}
-		}
+		}, {}]
 	}
 }
