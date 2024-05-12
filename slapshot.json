@@ -1,6 +1,6 @@
 {
-	"sensitivity":10000.0,
-	"mode":"FPS",
+	"sensitivity":100000.0,
+	"mode":"SideScrolling",
 	"log_keynames":false,
 	"binds":{
 		"FPS": [
@@ -35,6 +35,19 @@
 			}
 		}],
 		"SideScrolling":[{
+			"UpArrow":{
+				"Axis": ["RY", 1.0]
+			},
+			"DownArrow":{
+				"Axis": ["RY", -1.0]
+
+			},
+			"RightArrow":{
+				"Axis": ["RX", 1.0]
+			},
+			"LeftArrow":{
+				"Axis": ["RX", -1.0]
+			},
 			"KeyJ":{
 				"Button":"B"
 			},
@@ -66,13 +79,13 @@
 				"Button": "RB" 
 			},
 			"Space":{
-				"Modifier": ["LY", 0.45]
+				"Modifier": ["RY", 0.45]
 			},
 			"ControlLeft":{
-				"Modifier": ["LY", 0.70]
+				"Modifier": ["RY", 0.85]
 			},
 			"ShiftLeft":{
-				"Modifier": ["LX", 0.5]
+				"Modifier": ["RX", 0.5]
 			}
 		}, {}]
 	}

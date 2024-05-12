@@ -1,15 +1,5 @@
 use std::{
-    borrow::BorrowMut,
-    collections::HashMap,
-    fmt::write,
-    fs,
-    hash::Hash,
-    ops::Deref,
-    slice::Iter,
-    str::FromStr,
-    sync::{mpsc, Arc, RwLock},
-    thread,
-    time::{Duration, SystemTime},
+    borrow::BorrowMut, collections::HashMap, env, fmt::write, fs, hash::Hash, ops::Deref, slice::Iter, str::FromStr, sync::{mpsc, Arc, RwLock}, thread, time::{Duration, SystemTime}
 };
 
 use rdev::{Button, EventType, Key};
@@ -144,8 +134,9 @@ struct Config {
 struct Pause(bool);
 
 fn main() {
+    let file = env::args().nth(1).expect("Expected a config name");
     let mut config: Config =
-        serde_json::from_str(&fs::read_to_string("./config.json").unwrap()).unwrap();
+        serde_json::from_str(&fs::read_to_string(&format!("./{}.json", file)).unwrap()).unwrap();
     // let sensitivity = config["sensitivity"].as_float().unwrap() * 1000.0;
     // let mode = Mode::from_str(config["mode"].as_str().unwrap()).unwrap();
     // let log_keynames = config["log_keynames"].as_bool().unwrap();
@@ -352,6 +343,7 @@ fn main() {
                         let coords = (x, y);
 
                         let delta = (x - last_coords.0, y - last_coords.1);
+                        dbg!(delta);
 
                         let new_rx = (delta.0 * config.sensitivity);
                         let new_ry = (delta.1 * -config.sensitivity);
@@ -362,15 +354,17 @@ fn main() {
                         gamepad.thumb_rx = intermediate_rx as i16;
                         gamepad.thumb_ry = intermediate_ry as i16;
 
-                        last_coords = coords;
+                        last_coords = (0.0, 0.0); //coords;//(0.0, 0.0)/* coords */;
                     }
                 }
 
                 target.update(&gamepad).unwrap();
             } else {
-                gamepad.thumb_rx = 0;
-                gamepad.thumb_ry = 0;
-                target.update(&gamepad).unwrap();
+                if config.mode == Mode::FPS {
+                    gamepad.thumb_rx = 0;
+                    gamepad.thumb_ry = 0;
+                    target.update(&gamepad).unwrap();
+                }
                 thread::sleep(Duration::from_millis(20));
             }
             // thread::sleep(Duration::from_millis(20));
